@@ -2,11 +2,13 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
+import { randomUUID } from "crypto";
 import {
   processOrderData,
   parseDayRange,
   PRODUCT_CONFIGS,
 } from "./processor.js";
+import { createRequestLogger } from "./logger.js";
 import {
   supabaseConfigured,
   saveProcessingRun,
@@ -76,8 +78,27 @@ app.post(
     { name: "shiprocket", maxCount: 1 },
   ]),
   async (req, res) => {
+    const requestId = randomUUID().slice(0, 8);
+    const logger = createRequestLogger(requestId);
+
     try {
       const company = (req.body.company || "niconi").toLowerCase();
+
+      if (!PRODUCT_CONFIGS[company]) {
+        logger.error("Invalid company", { company });
+        return res.status(400).json({
+          error: "company must be niconi or epitight",
+          logs: logger.getLogs(),
+        });
+      }
+
+      logger.info("Processing request received", {
+        status: "started",
+        company,
+        startDay: req.body.startDay || null,
+        endDay: req.body.endDay || null,
+      });
+
       const dayRange = parseDayRange(req.body.startDay, req.body.endDay);
 
       const files = req.files || {};
@@ -86,12 +107,29 @@ app.post(
       const shiprocketFile = files.shiprocket?.[0];
 
       if (!itlFile) {
-        return res.status(400).json({ error: "ITL CSV is required" });
+        logger.error("ITL CSV missing");
+        return res.status(400).json({
+          error: "ITL CSV is required",
+          logs: logger.getLogs(),
+        });
       }
 
       if (!gokwikFile) {
-        return res.status(400).json({ error: "GoKwik CSV is required" });
+        logger.error("GoKwik CSV missing");
+        return res.status(400).json({
+          error: "GoKwik CSV is required",
+          logs: logger.getLogs(),
+        });
       }
+
+      logger.info("Files received", {
+        status: "processing",
+        itl: { name: itlFile.originalname, size: itlFile.size },
+        gokwik: { name: gokwikFile.originalname, size: gokwikFile.size },
+        shiprocket: shiprocketFile
+          ? { name: shiprocketFile.originalname, size: shiprocketFile.size }
+          : null,
+      });
 
       const result = await processOrderData({
         company,
@@ -99,21 +137,31 @@ app.post(
         itlBuffer: itlFile.buffer,
         gokwikBuffer: gokwikFile.buffer,
         shiprocketBuffer: shiprocketFile?.buffer ?? null,
+        logger,
       });
 
+      logger.info("Saving run to database…", { status: "processing" });
       const savedRun = await saveProcessingRun(result, Boolean(shiprocketFile));
+      logger.info("Run saved", { status: "saved", runId: savedRun.id });
 
       const { excelBuffer, ...jsonResult } = result;
+
+      logger.info("Request completed successfully", { status: "completed" });
 
       res.json({
         ...jsonResult,
         id: savedRun.id,
         createdAt: savedRun.createdAt,
         excelBase64: excelBuffer.toString("base64"),
+        logs: logger.getLogs(),
       });
     } catch (err) {
+      logger.error(err.message || "Processing failed", { status: "failed" });
       console.error(err);
-      res.status(400).json({ error: err.message || "Processing failed" });
+      res.status(400).json({
+        error: err.message || "Processing failed",
+        logs: logger.getLogs(),
+      });
     }
   },
 );

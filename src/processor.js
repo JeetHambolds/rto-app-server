@@ -1,5 +1,14 @@
 import ExcelJS from "exceljs";
 import { parse } from "csv-parse/sync";
+import { PRODUCT_CONFIGS } from "./productConfigs.js";
+import {
+  validateItlFile,
+  validateGokwikFile,
+  validateShiprocketFile,
+  validateCompanyItlData,
+} from "./validate.js";
+
+export { PRODUCT_CONFIGS };
 
 function csvBufferToRecords(buffer) {
   const records = parse(buffer, {
@@ -192,49 +201,6 @@ function normalizePayment(method) {
   return val === "cod" ? "COD" : "PREPAID";
 }
 
-export const PRODUCT_CONFIGS = {
-  niconi: {
-    productMap: {
-      DTanPack: "Niconi Men Enzyme De-Tan Pack",
-      B07NGMYJX6: "Niconi Herbal Hair Oil",
-      JADTATVA01: "Niconi JADTATVA Spray",
-      B0GH71SCC1: "Niconi Anti-Dandruff Shampoo",
-      B0F1TDDNGD: "Niconi Tan Vanish",
-    },
-    productDisplayMap: {
-      DTanPack: "Men's De Tan",
-      B07NGMYJX6: "Herbal Hair Oil",
-      JADTATVA01: "Jadtatva Hair Oil Spray",
-      B0GH71SCC1: "Anti Dandruff Shampoo",
-      B0F1TDDNGD: "Tan Vanish",
-    },
-  },
-  epitight: {
-    productMap: {
-      B0DNDYWH4L:
-        "Epitight Thicc Hair | Thicker and Fuller Hair | Carb-based Formula | 200ml Hair Mousse (200 ml)",
-      "4R-J0EZ-9CL2": "Epitight Protein Melted Shine Spray 200 ml",
-      B0CVQSBQXQ: "Epitight Dry Shampoo - 200 ml",
-      B0F6NKMVGZ:
-        "Epitight Water-Proof Makeup Fixer | All-Weather-Proof | Make-up Setting Spray | 130ml Primer - 130 ml (White)",
-      B0D8J6JBZ6: "Epitight Sleek Stick",
-      B0F38FVPPP:
-        "EPITIGHT FAKEIT GREY COVERING STARCH | NATURAL BROWN BLACK 160ml",
-      B0F5CL1D9H: "Epitight Color Security Shampoo",
-      B0DM6HD2XM: "Epitight Dry Shampoo - 130 ml",
-    },
-    productDisplayMap: {
-      B0DNDYWH4L: "Thicc Hair Mousse 200 ml",
-      "4R-J0EZ-9CL2": "Protein Melted Shine Spray 200 ml",
-      B0CVQSBQXQ: "Dry Shampoo 200 ml",
-      B0F6NKMVGZ: "Water-Proof Makeup Fixer 130 ml",
-      B0D8J6JBZ6: "Sleek Stick",
-      B0F38FVPPP: "Fakeit Grey Covering Starch 160 ml",
-      B0F5CL1D9H: "Color Security Shampoo",
-      B0DM6HD2XM: "Dry Shampoo 130 ml",
-    },
-  },
-};
 
 function initStats() {
   return {
@@ -306,6 +272,7 @@ export function buildProductTableRows(statsBySku, productDisplayMap) {
  * @param {Buffer|null} options.itlBuffer
  * @param {Buffer|null} options.gokwikBuffer
  * @param {Buffer|null} options.shiprocketBuffer
+ * @param {{ info?: Function, warn?: Function }} [options.logger]
  */
 export async function processOrderData({
   company = "niconi",
@@ -313,7 +280,9 @@ export async function processOrderData({
   itlBuffer = null,
   gokwikBuffer = null,
   shiprocketBuffer = null,
+  logger = null,
 }) {
+  const log = logger || { info: () => {}, warn: () => {} };
   const productConfig = PRODUCT_CONFIGS[company];
   if (!productConfig) {
     throw new Error(`Unknown company: ${company}`);
@@ -322,11 +291,55 @@ export async function processOrderData({
   const PRODUCT_MAP = productConfig.productMap;
   const PRODUCT_DISPLAY_MAP = productConfig.productDisplayMap;
 
+  log.info("Parsing CSV files…", { status: "processing" });
+
   const itlData = itlBuffer ? csvBufferToRecords(itlBuffer) : [];
   const gokwikData = gokwikBuffer ? csvBufferToRecords(gokwikBuffer) : [];
   const shiprocketData = shiprocketBuffer
     ? csvBufferToRecords(shiprocketBuffer)
     : [];
+
+  log.info("Validating ITL file…", { status: "processing", file: "itl" });
+  const itlMeta = validateItlFile(itlData);
+  log.info("ITL file validated", {
+    status: "validated",
+    file: "itl",
+    rowCount: itlMeta.rowCount,
+  });
+
+  log.info("Validating GoKwik file…", { status: "processing", file: "gokwik" });
+  const gokwikMeta = validateGokwikFile(gokwikData);
+  log.info("GoKwik file validated", {
+    status: "validated",
+    file: "gokwik",
+    rowCount: gokwikMeta.rowCount,
+  });
+
+  if (shiprocketBuffer) {
+    log.info("Validating Shiprocket file…", {
+      status: "processing",
+      file: "shiprocket",
+    });
+    const shiprocketMeta = validateShiprocketFile(shiprocketData);
+    log.info("Shiprocket file validated", {
+      status: "validated",
+      file: "shiprocket",
+      rowCount: shiprocketMeta.rowCount,
+    });
+  }
+
+  log.info("Checking ITL data matches selected company…", {
+    status: "processing",
+    company,
+  });
+  const companyMeta = validateCompanyItlData(itlData, company);
+  log.info("Company validation passed", {
+    status: "validated",
+    company,
+    companySkuCount: companyMeta.companySkuCount,
+  });
+
+  log.info("Processing order rows…", { status: "processing" });
 
   const paymentMap = new Map();
 
@@ -590,6 +603,12 @@ export async function processOrderData({
   }
 
   const excelBuffer = Buffer.from(await outWorkbook.xlsx.writeBuffer());
+
+  log.info("Processing complete", {
+    status: "processed",
+    processedCount: processedRows.length,
+    skippedCount: skippedRows.length,
+  });
 
   const dailyBreakdown = dayRange
     ? Object.keys(dailyOverallStats)

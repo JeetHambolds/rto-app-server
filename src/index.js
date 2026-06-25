@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
+import rateLimit from "express-rate-limit";
 import { randomUUID } from "crypto";
 import {
   processOrderData,
@@ -18,6 +19,19 @@ import {
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 45;
+const RATE_LIMIT_WINDOW_MS =
+  Number(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 60 * 1000;
+
+const apiLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: `Rate limit exceeded. Maximum ${RATE_LIMIT_MAX} requests per hour.`,
+  },
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -36,6 +50,7 @@ const upload = multer({
 
 app.use(cors());
 app.use(express.json());
+app.use("/api", apiLimiter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", supabase: supabaseConfigured });
@@ -177,6 +192,9 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  console.log(
+    `Rate limit: ${RATE_LIMIT_MAX} requests per ${RATE_LIMIT_WINDOW_MS / 1000 / 60} minutes`,
+  );
   if (!supabaseConfigured) {
     console.warn(
       "Warning: Supabase not configured — set SUPABASE_URL and SUPABASE_ANON_KEY in .env",

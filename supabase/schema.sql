@@ -1,5 +1,56 @@
 -- Run this in the Supabase SQL editor
 
+-- ---------------------------------------------------------------------------
+-- App users (RTO / RECO)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  user_type TEXT NOT NULL CHECK (user_type IN ('RTO', 'RECO')),
+  is_admin BOOLEAN NOT NULL DEFAULT false,
+  is_approved BOOLEAN NOT NULL DEFAULT false,
+  approved_at TIMESTAMPTZ,
+  approved_by UUID REFERENCES public.app_users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (email, user_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_users_user_type_is_approved
+  ON public.app_users (user_type, is_approved);
+
+CREATE INDEX IF NOT EXISTS idx_app_users_email_user_type
+  ON public.app_users (email, user_type);
+
+ALTER TABLE public.app_users DISABLE ROW LEVEL SECURITY;
+
+-- ---------------------------------------------------------------------------
+-- Refresh tokens (opaque tokens stored hashed; access JWTs stay client-side)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.refresh_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.app_users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash
+  ON public.refresh_tokens (token_hash);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id
+  ON public.refresh_tokens (user_id);
+
+ALTER TABLE public.refresh_tokens DISABLE ROW LEVEL SECURITY;
+
+-- ---------------------------------------------------------------------------
+-- Processing runs
+-- ---------------------------------------------------------------------------
+
 create table if not exists processing_runs (
   id uuid primary key default gen_random_uuid(),
   company text not null check (company in ('niconi', 'epitight')),

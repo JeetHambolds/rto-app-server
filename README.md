@@ -29,8 +29,6 @@ cp .env.example .env
 | `SUPABASE_URL` | Supabase project URL | `https://xxx.supabase.co` |
 | `SUPABASE_ANON_KEY` | Supabase anon/public key | From Settings → API |
 | `PORT` | Server port | `3001` |
-| `RATE_LIMIT_MAX` | Max API requests per window (default: 45) | `45` |
-| `RATE_LIMIT_WINDOW_MS` | Rate limit window in ms (default: 1 hour) | `3600000` |
 
 ### Database
 
@@ -45,16 +43,6 @@ npm start
 ```
 
 Server starts at `http://localhost:3001` (or your `PORT`).
-
-## Rate limiting
-
-All `/api/*` routes are limited to **45 requests per hour** per IP by default (configurable via `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_MS`). When exceeded, the server responds with `429 Too Many Requests`:
-
-```json
-{ "error": "Rate limit exceeded. Maximum 45 requests per hour." }
-```
-
-Standard `RateLimit-*` response headers are included.
 
 ## API endpoints
 

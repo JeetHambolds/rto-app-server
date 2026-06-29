@@ -282,7 +282,7 @@ export async function processOrderData({
   shiprocketBuffer = null,
   logger = null,
 }) {
-  const log = logger || { info: () => {}, warn: () => {} };
+  const log = logger || { info: async () => {}, warn: async () => {}, tick: async () => {} };
   const productConfig = PRODUCT_CONFIGS[company];
   if (!productConfig) {
     throw new Error(`Unknown company: ${company}`);
@@ -291,55 +291,79 @@ export async function processOrderData({
   const PRODUCT_MAP = productConfig.productMap;
   const PRODUCT_DISPLAY_MAP = productConfig.productDisplayMap;
 
-  log.info("Parsing CSV files…", { status: "processing" });
+  await log.info("Parsing CSV files…", { status: "processing" });
 
+  await log.info("Parsing ITL CSV…", { status: "processing", file: "itl" });
   const itlData = itlBuffer ? csvBufferToRecords(itlBuffer) : [];
-  const gokwikData = gokwikBuffer ? csvBufferToRecords(gokwikBuffer) : [];
-  const shiprocketData = shiprocketBuffer
-    ? csvBufferToRecords(shiprocketBuffer)
-    : [];
+  await log.info("ITL CSV parsed", {
+    status: "processing",
+    file: "itl",
+    rowCount: itlData.length,
+  });
 
-  log.info("Validating ITL file…", { status: "processing", file: "itl" });
+  await log.info("Parsing GoKwik CSV…", { status: "processing", file: "gokwik" });
+  const gokwikData = gokwikBuffer ? csvBufferToRecords(gokwikBuffer) : [];
+  await log.info("GoKwik CSV parsed", {
+    status: "processing",
+    file: "gokwik",
+    rowCount: gokwikData.length,
+  });
+
+  let shiprocketData = [];
+  if (shiprocketBuffer) {
+    await log.info("Parsing Shiprocket CSV…", {
+      status: "processing",
+      file: "shiprocket",
+    });
+    shiprocketData = csvBufferToRecords(shiprocketBuffer);
+    await log.info("Shiprocket CSV parsed", {
+      status: "processing",
+      file: "shiprocket",
+      rowCount: shiprocketData.length,
+    });
+  }
+
+  await log.info("Validating ITL file…", { status: "processing", file: "itl" });
   const itlMeta = validateItlFile(itlData);
-  log.info("ITL file validated", {
+  await log.info("ITL file validated", {
     status: "validated",
     file: "itl",
     rowCount: itlMeta.rowCount,
   });
 
-  log.info("Validating GoKwik file…", { status: "processing", file: "gokwik" });
+  await log.info("Validating GoKwik file…", { status: "processing", file: "gokwik" });
   const gokwikMeta = validateGokwikFile(gokwikData);
-  log.info("GoKwik file validated", {
+  await log.info("GoKwik file validated", {
     status: "validated",
     file: "gokwik",
     rowCount: gokwikMeta.rowCount,
   });
 
   if (shiprocketBuffer) {
-    log.info("Validating Shiprocket file…", {
+    await log.info("Validating Shiprocket file…", {
       status: "processing",
       file: "shiprocket",
     });
     const shiprocketMeta = validateShiprocketFile(shiprocketData);
-    log.info("Shiprocket file validated", {
+    await log.info("Shiprocket file validated", {
       status: "validated",
       file: "shiprocket",
       rowCount: shiprocketMeta.rowCount,
     });
   }
 
-  log.info("Checking ITL data matches selected company…", {
+  await log.info("Checking ITL data matches selected company…", {
     status: "processing",
     company,
   });
   const companyMeta = validateCompanyItlData(itlData, company);
-  log.info("Company validation passed", {
+  await log.info("Company validation passed", {
     status: "validated",
     company,
     companySkuCount: companyMeta.companySkuCount,
   });
 
-  log.info("Processing order rows…", { status: "processing" });
+  await log.info("Processing order rows…", { status: "processing" });
 
   const paymentMap = new Map();
 
@@ -533,8 +557,11 @@ export async function processOrderData({
   const dailyOverallStats = dayRange ? {} : null;
   const dailyProductStats = dayRange ? {} : null;
   const processedRows = [];
+  let rowIndex = 0;
+  const totalOrders = ordersById.size;
 
   for (const entry of ordersById.values()) {
+    rowIndex++;
     const {
       orderNumber,
       rawStatus,
@@ -600,11 +627,19 @@ export async function processOrderData({
       orderMonth: monthKey,
       finalStatus,
     });
+
+    if (rowIndex % 5000 === 0 || rowIndex === totalOrders) {
+      await log.info(`Processed ${rowIndex} of ${totalOrders} orders…`, {
+        status: "processing",
+        processedCount: rowIndex,
+        totalOrders,
+      });
+    }
   }
 
   const excelBuffer = Buffer.from(await outWorkbook.xlsx.writeBuffer());
 
-  log.info("Processing complete", {
+  await log.info("Processing complete", {
     status: "processed",
     processedCount: processedRows.length,
     skippedCount: skippedRows.length,

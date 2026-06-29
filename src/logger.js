@@ -1,7 +1,8 @@
-export function createRequestLogger(requestId) {
+export function createRequestLogger(requestId, options = {}) {
   const logs = [];
+  const onEntry = options.onEntry;
 
-  function add(level, message, meta = {}) {
+  async function add(level, message, meta = {}) {
     const entry = {
       timestamp: new Date().toISOString(),
       level,
@@ -9,6 +10,9 @@ export function createRequestLogger(requestId) {
       ...meta,
     };
     logs.push(entry);
+    if (onEntry) {
+      await onEntry(entry);
+    }
 
     const prefix = `[${requestId}]`;
     const detail = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : "";
@@ -26,5 +30,6 @@ export function createRequestLogger(requestId) {
     warn: (message, meta) => add("warn", message, meta),
     error: (message, meta) => add("error", message, meta),
     getLogs: () => logs,
+    tick: () => new Promise((resolve) => setImmediate(resolve)),
   };
 }

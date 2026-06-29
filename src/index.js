@@ -85,20 +85,43 @@ app.post(
   ]),
   async (req, res) => {
     const requestId = randomUUID().slice(0, 8);
-    const logger = createRequestLogger(requestId);
+
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.statusCode = 200;
+    res.flushHeaders();
+
+    const writeEvent = async (event) => {
+      if (res.writableEnded) return;
+
+      const ok = res.write(`${JSON.stringify(event)}\n`);
+      if (!ok) {
+        await new Promise((resolve) => res.once("drain", resolve));
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+
+    const logger = createRequestLogger(requestId, {
+      onEntry: (entry) => writeEvent({ type: "log", entry }),
+    });
 
     try {
       const company = (req.body.company || "niconi").toLowerCase();
 
       if (!PRODUCT_CONFIGS[company]) {
-        logger.error("Invalid company", { company });
-        return res.status(400).json({
+        await logger.error("Invalid company", { company });
+        await writeEvent({
+          type: "error",
           error: "company must be niconi or epitight",
           logs: logger.getLogs(),
         });
+        res.statusCode = 400;
+        return res.end();
       }
 
-      logger.info("Processing request received", {
+      await logger.info("Processing request received", {
         status: "started",
         company,
         startDay: req.body.startDay || null,
@@ -113,22 +136,28 @@ app.post(
       const shiprocketFile = files.shiprocket?.[0];
 
       if (!itlFile) {
-        logger.error("ITL CSV missing");
-        return res.status(400).json({
+        await logger.error("ITL CSV missing");
+        await writeEvent({
+          type: "error",
           error: "ITL CSV is required",
           logs: logger.getLogs(),
         });
+        res.statusCode = 400;
+        return res.end();
       }
 
       if (!gokwikFile) {
-        logger.error("GoKwik CSV missing");
-        return res.status(400).json({
+        await logger.error("GoKwik CSV missing");
+        await writeEvent({
+          type: "error",
           error: "GoKwik CSV is required",
           logs: logger.getLogs(),
         });
+        res.statusCode = 400;
+        return res.end();
       }
 
-      logger.info("Files received", {
+      await logger.info("Files received", {
         status: "processing",
         itl: { name: itlFile.originalname, size: itlFile.size },
         gokwik: { name: gokwikFile.originalname, size: gokwikFile.size },
@@ -146,28 +175,35 @@ app.post(
         logger,
       });
 
-      logger.info("Saving run to database…", { status: "processing" });
+      await logger.info("Saving run to database…", { status: "processing" });
       const savedRun = await saveProcessingRun(result, Boolean(shiprocketFile));
-      logger.info("Run saved", { status: "saved", runId: savedRun.id });
+      await logger.info("Run saved", { status: "saved", runId: savedRun.id });
 
       const { excelBuffer, ...jsonResult } = result;
 
-      logger.info("Request completed successfully", { status: "completed" });
+      await logger.info("Request completed successfully", { status: "completed" });
 
-      res.json({
-        ...jsonResult,
-        id: savedRun.id,
-        createdAt: savedRun.createdAt,
-        excelBase64: excelBuffer.toString("base64"),
-        logs: logger.getLogs(),
+      await writeEvent({
+        type: "result",
+        data: {
+          ...jsonResult,
+          id: savedRun.id,
+          createdAt: savedRun.createdAt,
+          excelBase64: excelBuffer.toString("base64"),
+          logs: logger.getLogs(),
+        },
       });
+      res.end();
     } catch (err) {
-      logger.error(err.message || "Processing failed", { status: "failed" });
+      await logger.error(err.message || "Processing failed", { status: "failed" });
       console.error(err);
-      res.status(400).json({
+      await writeEvent({
+        type: "error",
         error: err.message || "Processing failed",
         logs: logger.getLogs(),
       });
+      res.statusCode = 400;
+      res.end();
     }
   },
 );

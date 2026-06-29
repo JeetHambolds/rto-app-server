@@ -7,7 +7,7 @@ import {
   listUsers,
   refreshAuthTokens,
   revokeRefreshToken,
-  setUserApproval,
+  updateUserByAdmin,
   toPublicUser,
   verifyPassword,
 } from "./users.js";
@@ -133,21 +133,40 @@ router.get("/admin/users", requireAdmin, async (_req, res) => {
 
 router.patch("/admin/users/:id", requireAdmin, async (req, res) => {
   try {
-    const { isApproved } = req.body;
-    if (typeof isApproved !== "boolean") {
+    const { isApproved, isAdmin } = req.body;
+
+    if (isApproved === undefined && isAdmin === undefined) {
+      return res.status(400).json({
+        error: "Provide isApproved and/or isAdmin.",
+      });
+    }
+
+    if (isApproved !== undefined && typeof isApproved !== "boolean") {
       return res.status(400).json({ error: "isApproved must be a boolean." });
     }
 
-    const user = await setUserApproval(
+    if (isAdmin !== undefined && typeof isAdmin !== "boolean") {
+      return res.status(400).json({ error: "isAdmin must be a boolean." });
+    }
+
+    if (req.params.id === req.auth.user.id && isAdmin === false) {
+      return res.status(400).json({
+        error: "You cannot remove your own admin access.",
+      });
+    }
+
+    const user = await updateUserByAdmin(
       req.params.id,
-      isApproved,
+      { isApproved, isAdmin },
       req.auth.user.id,
     );
 
     res.json({ user });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message || "Failed to update user." });
+    res.status(err.status || 500).json({
+      error: err.message || "Failed to update user.",
+    });
   }
 });
 

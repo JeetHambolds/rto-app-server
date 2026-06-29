@@ -202,15 +202,42 @@ export async function listUsers(userType = APP_USER_TYPE) {
 }
 
 export async function setUserApproval(userId, isApproved, approvedBy) {
+  return updateUserByAdmin(userId, { isApproved }, approvedBy);
+}
+
+export async function updateUserByAdmin(
+  userId,
+  { isApproved, isAdmin },
+  actingAdminId,
+) {
   requireSupabase();
+
+  const updates = {};
+
+  if (typeof isApproved === "boolean") {
+    updates.is_approved = isApproved;
+    updates.approved_at = isApproved ? new Date().toISOString() : null;
+    updates.approved_by = isApproved ? actingAdminId : null;
+  }
+
+  if (typeof isAdmin === "boolean") {
+    updates.is_admin = isAdmin;
+    if (isAdmin) {
+      updates.is_approved = true;
+      updates.approved_at = new Date().toISOString();
+      updates.approved_by = actingAdminId;
+    }
+  }
+
+  if (!Object.keys(updates).length) {
+    throw Object.assign(new Error("No valid user updates provided."), {
+      status: 400,
+    });
+  }
 
   const { data, error } = await supabase
     .from("app_users")
-    .update({
-      is_approved: isApproved,
-      approved_at: isApproved ? new Date().toISOString() : null,
-      approved_by: isApproved ? approvedBy : null,
-    })
+    .update(updates)
     .eq("id", userId)
     .eq("user_type", APP_USER_TYPE)
     .select(

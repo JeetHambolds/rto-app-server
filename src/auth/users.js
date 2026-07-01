@@ -117,7 +117,20 @@ export async function createUser({ name, email, password }) {
   return data;
 }
 
+function invalidRefreshTokenError() {
+  return Object.assign(new Error("Invalid or expired refresh token."), {
+    status: 401,
+  });
+}
+
+function isRefreshTokenExpired(expiresAt) {
+  const expiresAtMs = new Date(expiresAt).getTime();
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now();
+}
+
 export async function issueAuthTokens(user) {
+  requireSupabase();
+
   const accessToken = signAccessToken(user);
   const refreshToken = generateRefreshToken();
   const tokenHash = hashRefreshToken(refreshToken);
@@ -137,25 +150,24 @@ export async function issueAuthTokens(user) {
 export async function refreshAuthTokens(refreshToken) {
   requireSupabase();
 
-  const tokenHash = hashRefreshToken(refreshToken);
-  const now = new Date().toISOString();
+  const normalizedToken = String(refreshToken || "").trim();
+  if (!normalizedToken) {
+    throw invalidRefreshTokenError();
+  }
+
+  const tokenHash = hashRefreshToken(normalizedToken);
 
   const { data: storedToken, error } = await supabase
     .from("refresh_tokens")
     .select("id, user_id, expires_at, revoked_at")
     .eq("token_hash", tokenHash)
+    .is("revoked_at", null)
     .maybeSingle();
 
   if (error) throw error;
 
-  if (
-    !storedToken ||
-    storedToken.revoked_at ||
-    storedToken.expires_at <= now
-  ) {
-    throw Object.assign(new Error("Invalid or expired refresh token."), {
-      status: 401,
-    });
+  if (!storedToken || isRefreshTokenExpired(storedToken.expires_at)) {
+    throw invalidRefreshTokenError();
   }
 
   const user = await findUserById(storedToken.user_id);
@@ -163,20 +175,42 @@ export async function refreshAuthTokens(refreshToken) {
     throw Object.assign(new Error("Account is not approved."), { status: 403 });
   }
 
-  const { error: revokeError } = await supabase
+  const accessToken = signAccessToken(user);
+  const nextRefreshToken = generateRefreshToken();
+  const nextTokenHash = hashRefreshToken(nextRefreshToken);
+  const nextExpiresAt = new Date(
+    Date.now() + REFRESH_TOKEN_TTL_MS,
+  ).toISOString();
+
+  // Rotate in place so concurrent refresh attempts don't invalidate a valid session.
+  const { data: rotated, error: rotateError } = await supabase
     .from("refresh_tokens")
-    .update({ revoked_at: now })
-    .eq("id", storedToken.id);
+    .update({
+      token_hash: nextTokenHash,
+      expires_at: nextExpiresAt,
+    })
+    .eq("id", storedToken.id)
+    .eq("token_hash", tokenHash)
+    .is("revoked_at", null)
+    .select("id")
+    .maybeSingle();
 
-  if (revokeError) throw revokeError;
+  if (rotateError) throw rotateError;
 
-  return issueAuthTokens(user);
+  if (!rotated) {
+    throw invalidRefreshTokenError();
+  }
+
+  return { accessToken, refreshToken: nextRefreshToken };
 }
 
 export async function revokeRefreshToken(refreshToken) {
   requireSupabase();
 
-  const tokenHash = hashRefreshToken(refreshToken);
+  const normalizedToken = String(refreshToken || "").trim();
+  if (!normalizedToken) return;
+
+  const tokenHash = hashRefreshToken(normalizedToken);
   const { error } = await supabase
     .from("refresh_tokens")
     .update({ revoked_at: new Date().toISOString() })

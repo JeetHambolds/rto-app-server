@@ -175,21 +175,23 @@ app.post(
         logger,
       });
 
+      // Release uploaded file buffers before DB save.
+      itlFile.buffer = null;
+      gokwikFile.buffer = null;
+      if (shiprocketFile) shiprocketFile.buffer = null;
+
       await logger.info("Saving run to database…", { status: "processing" });
       const savedRun = await saveProcessingRun(result, Boolean(shiprocketFile));
       await logger.info("Run saved", { status: "saved", runId: savedRun.id });
-
-      const { excelBuffer, ...jsonResult } = result;
 
       await logger.info("Request completed successfully", { status: "completed" });
 
       await writeEvent({
         type: "result",
         data: {
-          ...jsonResult,
+          ...result,
           id: savedRun.id,
           createdAt: savedRun.createdAt,
-          excelBase64: excelBuffer.toString("base64"),
           logs: logger.getLogs(),
         },
       });

@@ -1,4 +1,3 @@
-import ExcelJS from "exceljs";
 import { parse } from "csv-parse/sync";
 import { PRODUCT_CONFIGS } from "./productConfigs.js";
 import {
@@ -373,44 +372,13 @@ export async function processOrderData({
     const payment = normalizePayment(row["Payment Method"]);
     paymentMap.set(orderId, payment);
   });
-
-  const outWorkbook = new ExcelJS.Workbook();
-  const processedSheet = outWorkbook.addWorksheet("Processed");
-  const skippedSheet = outWorkbook.addWorksheet("Skipped Rows");
-
-  processedSheet.addRow([
-    "Order Number",
-    "Order Status",
-    "Attempt Count",
-    "Payment Method",
-    "Order Month",
-    "Final Status",
-  ]);
-
-  skippedSheet.addRow([
-    "Source",
-    "Order Number",
-    "Order Status",
-    "Attempt Count",
-    "Payment Method",
-    "Order Month",
-    "Reason",
-  ]);
+  gokwikData.length = 0;
 
   const ordersById = new Map();
-  const skippedRows = [];
+  let skippedCount = 0;
 
-  function recordSkipped(row) {
-    skippedSheet.addRow(row);
-    skippedRows.push({
-      source: row[0],
-      orderNumber: row[1],
-      orderStatus: row[2],
-      attemptCount: row[3],
-      paymentMethod: row[4],
-      orderMonth: row[5],
-      reason: row[6],
-    });
+  function recordSkipped() {
+    skippedCount++;
   }
 
   function recordOrder(entry) {
@@ -437,15 +405,7 @@ export async function processOrderData({
           : bestRow.sourceName,
     });
 
-    recordSkipped([
-      entry.sourceName,
-      entry.orderNumber,
-      entry.rawStatus,
-      entry.attemptCount,
-      entry.paymentMethod,
-      entry.monthKey,
-      `Merged duplicate → ${mergedStatus} (kept ${bestRow.rawOrder})`,
-    ]);
+    recordSkipped();
   }
 
   function processRows(
@@ -485,15 +445,7 @@ export async function processOrderData({
       }
 
       if (!orderNumber || !paymentMethod) {
-        recordSkipped([
-          sourceName,
-          orderNumber,
-          rawStatus,
-          attemptCount,
-          paymentMethod,
-          monthKey,
-          "Missing Order / Payment",
-        ]);
+        recordSkipped();
         return;
       }
 
@@ -504,15 +456,7 @@ export async function processOrderData({
       );
 
       if (finalStatus === "Cancelled" || finalStatus === "Open") {
-        recordSkipped([
-          sourceName,
-          orderNumber,
-          rawStatus,
-          attemptCount,
-          paymentMethod,
-          monthKey,
-          `Excluded: ${finalStatus}`,
-        ]);
+        recordSkipped();
         return;
       }
 
@@ -542,6 +486,7 @@ export async function processOrderData({
     "Product Name",
     "Product SKU",
   );
+  itlData.length = 0;
 
   processRows(
     shiprocketData,
@@ -551,23 +496,20 @@ export async function processOrderData({
     "Attempt Count",
     "Shiprocket Created At",
   );
+  shiprocketData.length = 0;
 
   const overallStats = initStats();
   const productStats = {};
   const dailyOverallStats = dayRange ? {} : null;
   const dailyProductStats = dayRange ? {} : null;
-  const processedRows = [];
+  let processedCount = 0;
   let rowIndex = 0;
   const totalOrders = ordersById.size;
 
   for (const entry of ordersById.values()) {
     rowIndex++;
     const {
-      orderNumber,
-      rawStatus,
-      attemptCount,
       paymentMethod,
-      monthKey,
       finalStatus,
       rawDate,
       sku,
@@ -610,23 +552,7 @@ export async function processOrderData({
       }
     }
 
-    processedSheet.addRow([
-      orderNumber,
-      rawStatus,
-      attemptCount,
-      paymentMethod,
-      monthKey,
-      finalStatus,
-    ]);
-
-    processedRows.push({
-      orderNumber,
-      orderStatus: rawStatus,
-      attemptCount,
-      paymentMethod,
-      orderMonth: monthKey,
-      finalStatus,
-    });
+    processedCount++;
 
     if (rowIndex % 5000 === 0 || rowIndex === totalOrders) {
       await log.info(`Processed ${rowIndex} of ${totalOrders} orders…`, {
@@ -637,12 +563,13 @@ export async function processOrderData({
     }
   }
 
-  const excelBuffer = Buffer.from(await outWorkbook.xlsx.writeBuffer());
+  ordersById.clear();
+  paymentMap.clear();
 
   await log.info("Processing complete", {
     status: "processed",
-    processedCount: processedRows.length,
-    skippedCount: skippedRows.length,
+    processedCount,
+    skippedCount,
   });
 
   const dailyBreakdown = dayRange
@@ -664,11 +591,8 @@ export async function processOrderData({
     overall: buildStatsTable(overallStats),
     products: buildProductTableRows(productStats, PRODUCT_DISPLAY_MAP),
     dailyBreakdown,
-    processedCount: processedRows.length,
-    skippedCount: skippedRows.length,
-    processedRows,
-    skippedRows,
-    excelBuffer,
+    processedCount,
+    skippedCount,
   };
 }
 
